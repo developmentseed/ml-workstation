@@ -1,0 +1,19 @@
+{
+  "version": "30.0.0",
+  "files": {
+    "a6b95b440d26f6b8ab2e9d9d587993faf7ebb3fca8996331aff62cdcd906876c": {
+      "source": {
+        "path": "ml-workstation-ecs-prod.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "current_account-current_region": {
+          "bucketName": "cdk-hnb659fds-assets-${AWS::AccountId}-${AWS::Region}",
+          "objectKey": "a6b95b440d26f6b8ab2e9d9d587993faf7ebb3fca8996331aff62cdcd906876c.json",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-hnb659fds-file-publishing-role-${AWS::AccountId}-${AWS::Region}"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}
