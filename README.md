@@ -18,3 +18,23 @@ The current workflow, which consists of a pure EC2 instance deployed with a cust
 - Fargate based ECS: Fargate deployments have the advantage of handling the networking with an integrated load balancer (enables SSH and HTTP traffice), however they are not yet GPU compatible
 - EC2 based ECS: ECS tasks can be deployed from a custom docker image and can be deployed on GPU enabled hardware. The downside is that all of the networking has to be handled manually. This includes an application load balancer to enable HTTP traffic (for accessing the jupter lab instance) and a networkload balancer pointing to the application load balancer to enable SSH traffic (to enable SSH'ing into the instances)
 
+# To deploy: 
+```bash
+# create virtual environemnt
+python3 -m venv <your-env-name>
+source <your-env-name>/bin/activate
+
+# upgrade pip and install dependencies
+pip instlal --upgrade pip
+pip install -r requirements.txt
+
+# set npm version to 18 and install cdk
+nvm use 18
+npm install -g aws-cdk@2.X
+
+# Optional: verify cdk version
+cdk --version
+
+# deploy stack (use the --profile flag if you're using AWS named profiles)
+cdk deploy ml-workstation-ecs-<STAGE> --profile <your-named-aws-profile>
+```
