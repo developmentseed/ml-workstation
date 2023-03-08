@@ -1,58 +1,20 @@
 
-# Welcome to your CDK Python project!
+# ML Workstation
 
-This is a blank project for CDK development with Python.
+This goal of this project is to provide a machine learning workstation. This workstation has the following requirements: 
+- Easy to deploy and modify settings (memory, etc)
+- Easy to restart in case experiment enters a failed state
+- Quick to deploy (current workflow of deploying a AMI to EC2 takes too long)
+- Should have the following installed:  
+    - Julyter lab 
+    - GPU enabled PyTorch
+    - A Conda environment (possibly multiple conda environments)
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+# Considered implementations: 
+The current workflow, which consists of a pure EC2 instance deployed with a customized AMI takes too long to deploy. Alternatives include: 
+- Sagemaker notebook: 
+    - The default images are huge and bloated with unnecessary libraries
+    - A possible implementation would be to use a custom Sagemaker image, but at that point it essentially the same thing as an EC2 instance (the advantage is that all the networking is handled by Sagemaker - another thing to consider is the cost for a Sagemaker instance with a custom image)
+- Fargate based ECS: Fargate deployments have the advantage of handling the networking with an integrated load balancer (enables SSH and HTTP traffice), however they are not yet GPU compatible
+- EC2 based ECS: ECS tasks can be deployed from a custom docker image and can be deployed on GPU enabled hardware. The downside is that all of the networking has to be handled manually. This includes an application load balancer to enable HTTP traffic (for accessing the jupter lab instance) and a networkload balancer pointing to the application load balancer to enable SSH traffic (to enable SSH'ing into the instances)
 
-This project is set up like a standard Python project.  The initialization
-process also creates a virtualenv within this project, stored under the `.venv`
-directory.  To create the virtualenv it assumes that there is a `python3`
-(or `python` for Windows) executable in your path with access to the `venv`
-package. If for any reason the automatic creation of the virtualenv fails,
-you can create the virtualenv manually.
-
-To manually create a virtualenv on MacOS and Linux:
-
-```
-$ python3 -m venv .venv
-```
-
-After the init process completes and the virtualenv is created, you can use the following
-step to activate your virtualenv.
-
-```
-$ source .venv/bin/activate
-```
-
-If you are a Windows platform, you would activate the virtualenv like this:
-
-```
-% .venv\Scripts\activate.bat
-```
-
-Once the virtualenv is activated, you can install the required dependencies.
-
-```
-$ pip install -r requirements.txt
-```
-
-At this point you can now synthesize the CloudFormation template for this code.
-
-```
-$ cdk synth
-```
-
-To add additional dependencies, for example other CDK libraries, just add
-them to your `setup.py` file and rerun the `pip install -r requirements.txt`
-command.
-
-## Useful commands
-
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
