@@ -130,3 +130,4 @@ dmypy.json
 
 cdk.out*
 .env*
+*.pem
