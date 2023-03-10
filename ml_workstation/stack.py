@@ -2,12 +2,13 @@ from . import config
 from . import utils
 
 from constructs import Construct
-
+import time
 from aws_cdk import Stack, RemovalPolicy, CfnOutput
 from aws_cdk import aws_ec2, aws_ecs, aws_logs, aws_kms, aws_efs, aws_autoscaling
 from aws_cdk import aws_ecs_patterns
 
 import boto3
+import botocore
 
 ec2_client = boto3.client("ec2")
 
@@ -16,16 +17,24 @@ class MlWorkstationEcsStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # CREATE SSH KEY PAIR IF NOT EXISTS
-        # to CREATE a NEW public key: `key_type="rsa"` and OMIT `public_key_material="publicKeyMaterial`
+        keypairs = None
+        try:
+            keypairs = ec2_client.describe_key_pairs(
+                KeyNames=[construct_id], IncludePublicKey=True
+            )["KeyPairs"]
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] != "InvalidKeyPair.NotFound":
+                raise e
+            # Exception due to KeyPair not being found - will create below
 
-        if construct_id not in [
-            k["KeyName"] for k in ec2_client.describe_key_pairs()["KeyPairs"]
-        ]:
+        # CREATE SSH KEY PAIR IF DOES NOT EXIST
+        # to CREATE a NEW public key: `key_type="rsa"` and OMIT `public_key_material="publicKeyMaterial`
+        timestamp = int(time.time())
+        if keypairs is None:
             print(f"NO KEYPAIR FOUND FOR STACK: {construct_id}, creating...")
             aws_ec2.CfnKeyPair(
                 self,
-                "ssh-key-pair",
+                f"ssh-key-pair-{timestamp}",
                 key_name=construct_id,
                 key_type="rsa",
             )
@@ -33,12 +42,13 @@ class MlWorkstationEcsStack(Stack):
         # IMPORT SSH KEY PAIR IF EXISTS
         # to USE an EXISTING public key: `public_key_material="publicKeyMaterial" and OMIT `key_type="rsa"`
         else:
+            [keypair] = keypairs
             print(f"SSH KEYPAIR EXISTS ({construct_id})")
             aws_ec2.CfnKeyPair(
                 self,
-                "ssh-key-pair",
+                f"ssh-key-pair-{timestamp}",
                 key_name=construct_id,
-                public_key_material="publicKeyMaterial",
+                public_key_material=keypair["PublicKey"],
             )
 
         vpc = aws_ec2.Vpc(self, "vpc", max_azs=2, nat_gateways=1)
@@ -152,19 +162,6 @@ class MlWorkstationEcsStack(Stack):
         )
         cluster.add_asg_capacity_provider(capacity_provider)
 
-        # cluster.add_capacity(
-        #     "default-autoscaling-capacity",
-        #     instance_type=aws_ec2.InstanceType("p2.xlarge"),
-        #     machine_image=aws_ecs.EcsOptimizedImage.amazon_linux2(
-        #         hardware_type=aws_ecs.AmiHardwareType.GPU
-        #     ),
-        #     desired_capacity=1,
-        #     min_capacity=1,
-        #     max_capacity=1,
-        #     associate_public_ip_address=True,
-        #     vpc_subnets=aws_ec2.SubnetSelection(subnet_type=aws_ec2.SubnetType.PUBLIC),
-        # )
-
         ecs_service = aws_ecs_patterns.ApplicationLoadBalancedEc2Service(
             scope=self,
             id="ecs-service",
@@ -177,13 +174,12 @@ class MlWorkstationEcsStack(Stack):
         ecs_service.service.connections.security_groups[0].add_ingress_rule(
             peer=aws_ec2.Peer.ipv4(vpc.vpc_cidr_block),
             connection=aws_ec2.Port.tcp(8888),
-            description="Allow inbound from VPC",
+            description="Allow inbound from VPC to PRIVATE security group",
         )
-
-        ecs_service.service.connections.security_groups[0].add_ingress_rule(
+        auto_scaling_group.connections.security_groups[0].add_ingress_rule(
             peer=aws_ec2.Peer.ipv4(utils.get_public_ip()),
             connection=aws_ec2.Port.tcp(22),
-            description="Allow inbound from local machine",
+            description="Allow inbound from local machine to PUBLIC security group",
         )
 
         jupyter_efs_security_group.connections.allow_from(
@@ -205,3 +201,13 @@ class MlWorkstationEcsStack(Stack):
         # )
 
         # CfnOutput(self, "get-container-public-ip-command", f"")
+
+        # upgrade aws cli to aws-cli/2.7.6
+
+        # Get KeyPair ID:
+        # echo $(aws ec2 describe-key-pairs --key-names "ml-workstation-ecs-prod" --query 'KeyPairs[0].KeyPairId' --output text  --profile dev-seed )
+
+        # Get privdate key from KeyPair ID:
+        # aws ssm get-parameter --name /ec2/keypair/{keypair_id} --query 'Parameter.Value' --with-decryption --output text --profile dev-seed > ml-workstation-ecs-prod.pem
+
+        # STOP ECS tasks before updating
