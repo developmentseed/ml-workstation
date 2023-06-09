@@ -2,54 +2,21 @@ from . import config
 from . import utils
 
 from constructs import Construct
-import time
 from aws_cdk import Stack, RemovalPolicy, CfnOutput
 from aws_cdk import aws_ec2, aws_ecs, aws_logs, aws_kms, aws_efs, aws_autoscaling
 from aws_cdk import aws_ecs_patterns
-
-import boto3
-import botocore
-
-ec2_client = boto3.client("ec2")
 
 
 class MlWorkstationEcsStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        keypairs = None
-        try:
-            keypairs = ec2_client.describe_key_pairs(
-                KeyNames=[construct_id], IncludePublicKey=True
-            )["KeyPairs"]
-        except botocore.exceptions.ClientError as e:
-            if e.response["Error"]["Code"] != "InvalidKeyPair.NotFound":
-                raise e
-            # Exception due to KeyPair not being found - will create below
-
-        # CREATE SSH KEY PAIR IF DOES NOT EXIST
-        # to CREATE a NEW public key: `key_type="rsa"` and OMIT `public_key_material="publicKeyMaterial`
-        timestamp = int(time.time())
-        if keypairs is None:
-            print(f"NO KEYPAIR FOUND FOR STACK: {construct_id}, creating...")
-            aws_ec2.CfnKeyPair(
-                self,
-                f"ssh-key-pair-{timestamp}",
-                key_name=construct_id,
-                key_type="rsa",
-            )
-
-        # IMPORT SSH KEY PAIR IF EXISTS
-        # to USE an EXISTING public key: `public_key_material="publicKeyMaterial" and OMIT `key_type="rsa"`
-        else:
-            [keypair] = keypairs
-            print(f"SSH KEYPAIR EXISTS ({construct_id})")
-            aws_ec2.CfnKeyPair(
-                self,
-                f"ssh-key-pair-{timestamp}",
-                key_name=construct_id,
-                public_key_material=keypair["PublicKey"],
-            )
+        cfn_keypair = aws_ec2.CfnKeyPair(
+            self,
+            "ssh-key-pair",
+            key_name=construct_id,
+            key_type="rsa",
+        )
 
         vpc = aws_ec2.Vpc(self, "vpc", max_azs=2, nat_gateways=1)
 
@@ -108,11 +75,6 @@ class MlWorkstationEcsStack(Stack):
         container = task_definition.add_container(
             "container",
             image=aws_ecs.ContainerImage.from_registry("pangeo/pytorch-notebook"),
-            # image=aws_ecs.ContainerImage.from_asset(
-            #     directory=".",
-            #     build_args={"SSH_PUBLIC_KEY": ssh_key} if ssh_key else {},
-            #     file="ml_workstation/Dockerfile",
-            # ),
             command=[
                 "jupyter",
                 "lab",
@@ -123,11 +85,9 @@ class MlWorkstationEcsStack(Stack):
             gpu_count=1,
             port_mappings=[
                 aws_ecs.PortMapping(container_port=8888, host_port=8888),
-                # aws_ecs.PortMapping(container_port=22, host_port=22),
             ],
             logging=log_driver,
             memory_reservation_mib=1024,
-            # environment={"SSH_PUBLIC_KEY": ssh_key} if ssh_key else {},
             health_check=aws_ecs.HealthCheck(
                 command=["CMD-SHELL", "curl -f http://127.0.0.1:8888/ || exit 1"]
             ),
@@ -145,20 +105,22 @@ class MlWorkstationEcsStack(Stack):
             machine_image=aws_ecs.EcsOptimizedImage.amazon_linux2(
                 hardware_type=aws_ecs.AmiHardwareType.GPU
             ),
-            # Or use Amazon ECS-Optimized Amazon Linux 2 AMI
-            # machineImage: EcsOptimizedImage.amazonLinux2(),
-            desired_capacity=1,
-            min_capacity=1,
+            desired_capacity=0,
+            min_capacity=0,
             max_capacity=1,
             associate_public_ip_address=True,
             vpc_subnets=aws_ec2.SubnetSelection(subnet_type=aws_ec2.SubnetType.PUBLIC),
-            # key name is name of stack (`construct_id`)
-            key_name=construct_id
-            # key_name=cfn_key_pair.key_name,
+            key_name=cfn_keypair.key_name,
         )
+        auto_scaling_group.node.add_dependency(vpc)
 
         capacity_provider = aws_ecs.AsgCapacityProvider(
-            self, "asg-capacity-provider", auto_scaling_group=auto_scaling_group
+            self,
+            "asg-capacity-provider",
+            auto_scaling_group=auto_scaling_group,
+            # ensures that resource's termination protenction doesn't block the stack
+            # from deleting
+            enable_managed_termination_protection=False,
         )
         cluster.add_asg_capacity_provider(capacity_provider)
 
@@ -192,22 +154,26 @@ class MlWorkstationEcsStack(Stack):
             path="/", healthy_http_codes="200-302", port="8888"
         )
 
-        # TODO: add output with ssh info for container
-        # TODO: if keypair exists, get value for secret key
-        # CfnOutput(
-        #     self,
-        #     id="retrieve-private-key-command",
-        #     value=f"echo $(aws ssm get-parameter --name /ec2/keypair/{cfn_key_pair.attr_key_pair_id} --with-decryption --query Parameter.Value --output text) > {cfn_key_pair.key_name}.pem & chmod 400 {cfn_key_pair.key_name}.pem",
-        # )
+        # TODO: add output with ssh info for container (public IP/DNS etc)
+        CfnOutput(
+            self,
+            id="retrieve-private-key-command",
+            value=f'aws ssm get-parameter --name /ec2/keypair/{cfn_keypair.attr_key_pair_id} --query "Parameter.Value" --with-decryption --output text --profile dev-seed > {cfn_keypair.key_name}.pem',
+        )
 
-        # CfnOutput(self, "get-container-public-ip-command", f"")
+        # NOTES for deploying updates:
 
-        # upgrade aws cli to aws-cli/2.7.6
+        # Make sure aws cli is upgraded aws-cli/2.7.6
+        # https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
 
-        # Get KeyPair ID:
-        # echo $(aws ec2 describe-key-pairs --key-names "ml-workstation-ecs-prod" --query 'KeyPairs[0].KeyPairId' --output text  --profile dev-seed )
+        # Make sure private key has correct permissions:
+        # chmod 400 ml-workstation-ecs-prod.pem
 
-        # Get privdate key from KeyPair ID:
-        # aws ssm get-parameter --name /ec2/keypair/{keypair_id} --query 'Parameter.Value' --with-decryption --output text --profile dev-seed > ml-workstation-ecs-prod.pem
+        # STOP ECS tasks before running cdk-deploy:
+        # There is somethign where the deployment waits for tasks to STOP before running updates to the service
 
-        # STOP ECS tasks before updating
+        # AutoScaling Group Capacity provider blocks stack deletion
+
+        # EC2 instance still charges through AutoScaling Group, even when task is stopped from ECS console
+        # To ensure the EC2 instances get stopped, set the `desired_count` property in the AutoScaling Group
+        # to 0.
